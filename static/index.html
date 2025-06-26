@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live CTF Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .challenge-card { transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out, opacity 0.2s; }
+        .challenge-card:not(.locked):hover { transform: translateY(-5px); box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.4), 0 4px 6px -2px rgba(99, 102, 241, 0.2); }
+        .challenge-card.solved { background-color: #1E40AF; border-color: #3B82F6; }
+        .challenge-card.locked { opacity: 0.5; cursor: not-allowed; }
+        #challenge-modal { background-color: rgba(0,0,0,0.7); backdrop-filter: blur(5px); }
+        .category-web { border-left: 4px solid #3498db; }
+        .category-net { border-left: 4px solid #2ecc71; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+
+    <div id="player-name-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-80">
+        <div class="bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-sm">
+            <h2 class="text-2xl font-bold text-white mb-4">Welcome, Challenger!</h2>
+            <input type="text" id="player-name-input" class="w-full bg-gray-900 text-white border border-gray-700 rounded-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Enter your name">
+            <button id="start-ctf-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md mt-6 transition">Start CTF</button>
+        </div>
+    </div>
+
+    <div id="main-content" class="container mx-auto p-4 md:p-8 hidden">
+        <header class="flex flex-col md:flex-row justify-between items-center mb-8 pb-4 border-b border-gray-700">
+            <h1 class="text-4xl font-bold text-white">CTF Dashboard</h1>
+            <div id="player-info" class="text-right mt-4 md:mt-0">
+                <p>Player: <span id="player-name-display" class="font-bold text-indigo-400"></span></p>
+                <p>Score: <span id="player-score-display" class="font-bold text-green-400">0</span></p>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-2">
+                <h2 class="text-3xl font-semibold text-white mb-6">Challenges</h2>
+                <div id="challenge-board" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6"></div>
+            </div>
+            <div>
+                <h2 class="text-3xl font-semibold text-white mb-6">Scoreboard</h2>
+                <div id="scoreboard" class="bg-gray-800 p-6 rounded-lg shadow-lg"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="challenge-modal" class="fixed inset-0 z-40 items-center justify-center hidden">
+        <div class="bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="modal-title" class="text-3xl font-bold text-white"></h3>
+                <button id="close-modal-btn" class="text-gray-400 hover:text-white"><i class="fas fa-times fa-2x"></i></button>
+            </div>
+            <div class="mb-4">
+                <span id="modal-category" class="text-sm font-semibold inline-block py-1 px-3 rounded-full"></span>
+                <span id="modal-points" class="ml-2 text-lg font-bold text-yellow-400"></span>
+            </div>
+            <div id="modal-description" class="text-gray-300 mb-6 prose prose-invert max-w-none"></div>
+            <div id="modal-link-container" class="mb-6"></div>
+            <div class="flex space-x-4">
+                <input type="text" id="flag-input" class="w-full bg-gray-900 text-white border border-gray-700 rounded-md px-4 py-2" placeholder="flag{...}">
+                <button id="submit-flag-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-md">Submit</button>
+            </div>
+            <p id="modal-feedback" class="mt-4 text-center h-6"></p>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        let state = {
+            currentPlayer: null,
+            challenges: {},
+            solvedChallenges: []
+        };
+        const DESCRIPTIONS = {
+            'web1': '<b>Objective:</b> Learn to inspect browser cookies and identify common encoding schemes.<br><br>A web developer was snacking while coding and left a strange cookie on this website. It doesn\'t look like normal text. Your mission is to find this cookie using your browser\'s developer tools and decode its value to reveal the secret flag. What kind of encoding might a developer use to quickly hide something?',
+            'web2': '<b>Objective:</b> Understand the purpose of `robots.txt` and why it\'s not a security feature.<br><br>Websites use a file called `robots.txt` to give instructions to web crawlers like Googlebot. It\'s a public file that tells them which pages to ignore. Can you find this site\'s `robots.txt` file and discover the secret area it\'s trying to hide from the world?',
+            'net1': '<b>Objective:</b> Use Wireshark to analyze unencrypted network traffic.<br><br>We\'ve captured network traffic from an old, insecure server. We suspect an employee logged in using File Transfer Protocol (FTP), which sends data in plain text. Your task is to open the provided capture file in Wireshark, find the FTP traffic, and extract the password. Remember, the password is the flag!',
+            'web3': '<b>Objective:</b> Understand and execute a basic SQL Injection attack.<br><br>This "state-of-the-art" admin portal is supposed to be impenetrable. Can you craft a special username or password to confuse the database and make it log you in without knowing the real credentials? A classic trick involves making the query always true.',
+            'net2': '<b>Objective:</b> Practice reassembling data from multiple packets using Wireshark\'s "Follow TCP Stream" feature.<br><br>In this network capture, two people were having a secret chat over Telnet. To avoid detection, they split their secret message (the flag) across several different packets. You\'ll need to isolate their conversation in Wireshark and reconstruct the full data stream to piece the flag back together.',
+        };
+        let activeChallengeId = null;
+
+        const el = id => document.getElementById(id);
+        
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) opts.body = JSON.stringify(body);
+            try {
+                const resp = await fetch(`/api${endpoint}`, opts);
+                if (!resp.ok) throw new Error('API Error');
+                return await resp.json();
+            } catch (err) {
+                console.error("API call failed:", err);
+                return null;
+            }
+        }
+
+        async function refreshData() {
+            const challenges = await apiCall('/challenges');
+            if (challenges) state.challenges = challenges;
+
+            const boardData = await apiCall(`/scoreboard?player=${state.currentPlayer}`);
+            if (boardData) {
+                state.solvedChallenges = boardData.solved_challenges || [];
+                renderScoreboard(boardData.players);
+                updatePlayerInfo(boardData.players);
+            }
+            renderChallenges();
+        }
+
+        function renderChallenges() {
+            el('challenge-board').innerHTML = '';
+            // Ensure challenges are sorted for consistent display
+            const sortedIds = Object.keys(state.challenges).sort((a, b) => state.challenges[a].points - state.challenges[b].points);
+
+            for (const id of sortedIds) {
+                const ch = state.challenges[id];
+                const isSolved = state.solvedChallenges.includes(id);
+                const isLocked = !ch.is_unlocked;
+
+                const card = document.createElement('div');
+                let cardClasses = `challenge-card bg-gray-800 p-6 rounded-lg border-2 border-gray-700 category-${ch.category.toLowerCase()}`;
+                if (isSolved) {
+                    cardClasses += ' solved';
+                } else if (isLocked) {
+                    cardClasses += ' locked';
+                } else {
+                    cardClasses += ' cursor-pointer';
+                }
+                card.className = cardClasses;
+
+                let iconHtml = '';
+                if (isSolved) {
+                    iconHtml = '<i class="fas fa-check-circle text-green-400 fa-lg"></i>';
+                } else if (isLocked) {
+                    iconHtml = '<i class="fas fa-lock text-yellow-400 fa-lg"></i>';
+                }
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <h4 class="text-xl font-bold">${ch.title}</h4>
+                        ${iconHtml}
+                    </div>
+                    <p class="text-sm text-indigo-400 mt-1">${ch.category}</p>
+                    <p class="text-lg font-bold text-yellow-400 mt-4">${ch.points} Points</p>`;
+                
+                if (!isLocked) {
+                    card.addEventListener('click', () => openModal(id));
+                }
+                el('challenge-board').appendChild(card);
+            }
+        }
+        
+        function renderScoreboard(players) {
+            el('scoreboard').innerHTML = (players || []).map((p, i) => `
+                <div class="flex justify-between items-center p-3 rounded-md ${p.name === state.currentPlayer ? 'bg-indigo-900' : ''}">
+                    <p><span class="font-bold mr-3">${i + 1}.</span>${p.name}</p>
+                    <p class="font-semibold text-green-400">${p.score}</p>
+                </div>`).join('');
+        }
+
+        function updatePlayerInfo(players) {
+            const player = (players || []).find(p => p.name === state.currentPlayer);
+            if(player) {
+                el('player-name-display').textContent = player.name;
+                el('player-score-display').textContent = player.score;
+            }
+        }
+        
+        function openModal(id) {
+            activeChallengeId = id;
+            const ch = state.challenges[id];
+            const isSolved = state.solvedChallenges.includes(id);
+
+            el('modal-title').textContent = ch.title;
+            el('modal-points').textContent = `${ch.points} Points`;
+            el('modal-description').innerHTML = DESCRIPTIONS[id] || "No description available.";
+            
+            const linkContainer = el('modal-link-container');
+            linkContainer.innerHTML = '';
+            if (ch.port) {
+                linkContainer.innerHTML = `<a href="http://${window.location.hostname}:${ch.port}" target="_blank" class="inline-block bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"><i class="fas fa-external-link-alt mr-2"></i>Open Challenge</a>`;
+            } else if (ch.file) {
+                linkContainer.innerHTML = `<a href="${ch.file}" download class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"><i class="fas fa-download mr-2"></i>Download File</a>`;
+            }
+
+            el('flag-input').value = '';
+            el('flag-input').disabled = isSolved;
+            el('submit-flag-btn').disabled = isSolved;
+            el('modal-feedback').textContent = '';
+            el('challenge-modal').classList.remove('hidden');
+            el('challenge-modal').classList.add('flex');
+        }
+
+        async function handleFlagSubmit() {
+            const flag = el('flag-input').value.trim();
+            const feedbackEl = el('modal-feedback');
+            if (!flag || !activeChallengeId) return;
+
+            feedbackEl.className = 'mt-4 text-center h-6 text-yellow-400';
+            feedbackEl.textContent = 'Checking...';
+            
+            const result = await apiCall('/submit', 'POST', { player: state.currentPlayer, challenge_id: activeChallengeId, flag });
+            
+            if (result && result.success) {
+                feedbackEl.className = 'mt-4 text-center h-6 text-green-400';
+                feedbackEl.textContent = result.message;
+                await refreshData();
+                setTimeout(() => el('challenge-modal').classList.add('hidden'), 1500);
+            } else {
+                feedbackEl.className = 'mt-4 text-center h-6 text-red-500';
+                feedbackEl.textContent = (result && result.message) || 'Incorrect Flag.';
+            }
+        }
+
+        el('start-ctf-btn').addEventListener('click', async () => {
+            const name = el('player-name-input').value.trim();
+            if (!name) return alert('Please enter a name.');
+            
+            const result = await apiCall('/player', 'POST', { name });
+            if (result && result.success) {
+                state.currentPlayer = result.name;
+                localStorage.setItem('ctfPlayerName', result.name);
+                el('player-name-modal').classList.add('hidden');
+                el('main-content').classList.remove('hidden');
+                await refreshData();
+                setInterval(refreshData, 10000);
+            }
+        });
+
+        el('close-modal-btn').addEventListener('click', () => el('challenge-modal').classList.add('hidden'));
+        el('submit-flag-btn').addEventListener('click', handleFlagSubmit);
+        el('flag-input').addEventListener('keyup', e => e.key === 'Enter' && handleFlagSubmit());
+
+        const savedPlayer = localStorage.getItem('ctfPlayerName');
+        if (savedPlayer) {
+            el('player-name-input').value = savedPlayer;
+            el('start-ctf-btn').click();
+        }
+    });
+    </script>
+</body>
+</html>
