@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live CTF Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .tab-button.active { border-color: #4f46e5; background-color: #4f46e5; color: white; }
+        .challenge-card { transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out, opacity 0.2s; }
+        .challenge-card:not(.locked):hover { transform: translateY(-5px); box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.4), 0 4px 6px -2px rgba(99, 102, 241, 0.2); }
+        .challenge-card.solved { background-color: #1E40AF; border-color: #3B82F6; }
+        .challenge-card.locked { opacity: 0.5; cursor: not-allowed; }
+        #challenge-modal { background-color: rgba(0,0,0,0.7); backdrop-filter: blur(5px); }
+        .category-web { border-left: 4px solid #3498db; }
+        .category-net { border-left: 4px solid #2ecc71; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+
+    <div id="player-name-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-80">
+        <div class="bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-sm">
+            <h2 class="text-2xl font-bold text-white mb-4">Welcome, Challenger!</h2>
+            <input type="text" id="player-name-input" class="w-full bg-gray-900 text-white border border-gray-700 rounded-md px-4 py-2" placeholder="Enter your name">
+            <button id="start-ctf-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md mt-6">Start CTF</button>
+        </div>
+    </div>
+
+    <div id="main-content" class="container mx-auto p-4 md:p-8 hidden">
+        <header class="flex flex-col md:flex-row justify-between items-center mb-8 pb-4 border-b border-gray-700">
+            <h1 class="text-4xl font-bold text-white">CTF Dashboard</h1>
+            <div id="player-info" class="text-right mt-4 md:mt-0">
+                <p>Player: <span id="player-name-display" class="font-bold text-indigo-400"></span></p>
+                <p>Score: <span id="player-score-display" class="font-bold text-green-400">0</span></p>
+            </div>
+        </header>
+
+        <!-- Tabs -->
+        <div class="mb-6 border-b border-gray-700">
+            <nav class="flex space-x-4" aria-label="Tabs">
+                <button id="tab-challenges" class="tab-button active px-3 py-2 font-medium text-sm rounded-t-lg border-b-2 border-transparent">Challenges</button>
+                <button id="tab-scoreboard" class="tab-button px-3 py-2 font-medium text-sm rounded-t-lg border-b-2 border-transparent">Scoreboard</button>
+                <button id="tab-chart" class="tab-button px-3 py-2 font-medium text-sm rounded-t-lg border-b-2 border-transparent">Chart</button>
+            </nav>
+        </div>
+
+        <!-- Tab Panels -->
+        <div id="panel-challenges" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6"></div>
+        <div id="panel-scoreboard" class="hidden overflow-x-auto"></div>
+        <div id="panel-chart" class="hidden bg-gray-800 p-4 rounded-lg"><canvas id="score-chart"></canvas></div>
+    </div>
+    
+    <!-- Challenge Modal -->
+    <div id="challenge-modal" class="fixed inset-0 z-40 items-center justify-center hidden">
+        <div class="bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+             <div class="flex justify-between items-center mb-4">
+                <h3 id="modal-title" class="text-3xl font-bold text-white"></h3>
+                <button id="close-modal-btn" class="text-gray-400 hover:text-white"><i class="fas fa-times fa-2x"></i></button>
+            </div>
+            <div id="modal-content-wrapper">
+                <!-- Content is dynamically inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        let state = {
+            currentPlayer: null,
+            challenges: {},
+            solvedMap: {},
+            scoreboard: [],
+            chartData: null,
+            challengeInfo: {}
+        };
+        const DESCRIPTIONS = {
+            'web1': 'A developer with a sweet tooth left something behind on this website. It looks like a cookie, but the recipe seems to be scrambled. Can you figure it out?',
+            'web2': 'This website has a set of instructions meant for search engine bots. Sometimes, instructions meant to hide things from bots only make them more obvious to a clever human.',
+            'net1': 'We captured a conversation between two computers on our network. It seems they were using an old, insecure protocol. The password might have been sent in plain sight.',
+            'web3': 'Only authorized personnel are allowed in the VIP lounge. The bouncer is tough, but we suspect the database that checks the guest list can be easily confused.',
+            'net2': 'Two operatives were exchanging secrets, but they were clever. They broke their message up into tiny pieces and sent it over the wire. Can you reassemble their conversation?',
+            'web4': 'This server is configured to only show its secrets to visitors from the inside. Is there a way to make it think your request is coming from a trusted local source?',
+            'web5': 'Upon visiting this site, you are handed a digital pass, a "token," that identifies you as a guest. What if you could upgrade your own pass to that of an administrator?',
+            'web6': 'A lazy developer was working on a new script for this site. We think they might have saved a backup copy of their work somewhere on the server with a common backup extension.',
+            'web7': 'This internal company portal lets employees view different pages by changing the URL. Perhaps it can be convinced to show a file it isn\'t supposed to, like a sensitive configuration backup?',
+            'web8': 'To help with network diagnostics, this page offers a simple tool to check if a machine is online. What else could you make this tool do if it handles your input carelessly?',
+        };
+        let activeChallengeId = null;
+        let scoreChart = null;
+
+        const el = id => document.getElementById(id);
+
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) opts.body = JSON.stringify(body);
+            try {
+                const resp = await fetch(`/api${endpoint}`, opts);
+                if (!resp.ok) {
+                    const errData = await resp.json().catch(() => ({ message: 'API Error' }));
+                    throw new Error(errData.message);
+                }
+                return await resp.json();
+            } catch (err) {
+                console.error("API call failed:", err);
+                return null;
+            }
+        }
+
+        async function refreshData() {
+            const challengesData = await apiCall('/challenges');
+            if (challengesData) state.challenges = challengesData;
+
+            const boardData = await apiCall(`/scoreboard?player=${state.currentPlayer}`);
+            if (boardData) {
+                state.scoreboard = boardData.players;
+                state.solvedMap = boardData.solved_map;
+                state.chartData = boardData.chart_data;
+                state.challengeInfo = boardData.challenge_info;
+                renderScoreboard();
+                updatePlayerInfo();
+                renderChart();
+            }
+            renderChallenges();
+        }
+        
+        function renderChallenges() {
+            el('panel-challenges').innerHTML = '';
+            const sortedIds = Object.keys(state.challenges).sort((a, b) => state.challenges[a].points - state.challenges[b].points);
+            for (const id of sortedIds) {
+                const ch = state.challenges[id];
+                const isSolved = (state.solvedMap[state.currentPlayer] || []).includes(id);
+                const isLocked = !ch.is_unlocked;
+                const card = document.createElement('div');
+                card.className = `challenge-card bg-gray-800 p-4 rounded-lg border-2 border-gray-700 ${isSolved ? 'solved' : ''} ${isLocked ? 'locked' : 'cursor-pointer'}`;
+                card.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <h4 class="text-lg font-bold">${ch.title}</h4>
+                        ${isSolved ? '<i class="fas fa-check-circle text-green-400"></i>' : (isLocked ? '<i class="fas fa-lock text-yellow-400"></i>' : '')}
+                    </div>
+                    <p class="text-sm text-indigo-400 mt-1">${ch.category}</p>
+                    <div class="flex justify-between items-end mt-2">
+                        <p class="text-lg font-bold text-yellow-400">${ch.points} pts</p>
+                        <button class="solves-btn text-xs bg-gray-600 px-2 py-1 rounded hover:bg-gray-500" data-id="${id}">Solves</button>
+                    </div>`;
+                
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.solves-btn')) {
+                        e.stopPropagation();
+                        showSolves(id);
+                    } else if (!isLocked) {
+                        openChallengeModal(id);
+                    }
+                });
+                el('panel-challenges').appendChild(card);
+            }
+        }
+
+        function renderScoreboard() {
+            if (!state.challengeInfo || Object.keys(state.challengeInfo).length === 0) return;
+            const sortedChallengeIds = Object.keys(state.challengeInfo).sort((a,b) => state.challenges[a].points - state.challenges[b].points);
+
+            const header = `
+                <thead class="bg-gray-700"><tr>
+                    <th class="p-2 text-left">Rank</th>
+                    <th class="p-2 text-left">Player</th>
+                    ${sortedChallengeIds.map(cid => `<th class="p-2 text-center text-xs">${state.challengeInfo[cid].name}</th>`).join('')}
+                    <th class="p-2 text-right">Score</th>
+                </tr></thead>`;
+            
+            const body = `<tbody>${state.scoreboard.map((p, i) => {
+                const playerSolves = state.solvedMap[p.name] || [];
+                return `
+                <tr class="border-b border-gray-700 ${p.name === state.currentPlayer ? 'bg-indigo-900' : ''}">
+                    <td class="p-2">${i + 1}</td>
+                    <td class="p-2 font-bold">${p.name}</td>
+                    ${sortedChallengeIds.map(cid => `<td class="p-2 text-center">${playerSolves.includes(cid) ? '<i class="fas fa-check text-green-400"></i>' : ''}</td>`).join('')}
+                    <td class="p-2 text-right font-bold">${p.score}</td>
+                </tr>`}).join('')}</tbody>`;
+            el('panel-scoreboard').innerHTML = `<table class="w-full text-sm">${header}${body}</table>`;
+        }
+
+        function renderChart() {
+            if (!state.chartData || Object.keys(state.chartData).length === 0) return;
+            const topPlayers = state.scoreboard.slice(0, 10).map(p => p.name);
+            const datasets = [];
+            const colors = ['#3498db', '#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#d35400', '#34495e', '#c0392b', '#8e44ad'];
+
+            topPlayers.forEach((player, i) => {
+                if (state.chartData[player]) {
+                    datasets.push({
+                        label: player,
+                        data: state.chartData[player].map(d => ({ x: new Date(d.x), y: d.y })),
+                        borderColor: colors[i % colors.length],
+                        fill: false,
+                        tension: 0.1
+                    });
+                }
+            });
+
+            const ctx = el('score-chart').getContext('2d');
+            if (scoreChart) scoreChart.destroy();
+            scoreChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    scales: {
+                        x: { type: 'time', time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } }, grid: { color: 'rgba(255,255,255,0.1)' } },
+                        y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.1)' } }
+                    }
+                }
+            });
+        }
+
+        function updatePlayerInfo() {
+            const player = state.scoreboard.find(p => p.name === state.currentPlayer);
+            if(player) {
+                el('player-name-display').textContent = player.name;
+                el('player-score-display').textContent = player.score;
+            }
+        }
+
+        async function showSolves(challengeId) {
+            const solves = await apiCall(`/solves/${challengeId}`);
+            if (solves) {
+                el('modal-title').textContent = `Solves for ${state.challenges[challengeId].title}`;
+                el('modal-content-wrapper').innerHTML = `<ul class="text-sm space-y-1">${solves.map(s => `<li><span class="font-bold">${s.player}</span> at ${new Date(s.time).toLocaleString()}</li>`).join('') || '<li>No solves yet.</li>'}</ul>`;
+                el('challenge-modal').classList.remove('hidden');
+                el('challenge-modal').classList.add('flex');
+            }
+        }
+        
+        function openChallengeModal(id) {
+            activeChallengeId = id;
+            const ch = state.challenges[id];
+            el('modal-title').textContent = ch.title;
+            el('modal-content-wrapper').innerHTML = `
+                <p id="modal-description" class="text-gray-300 mb-6 prose prose-invert max-w-none">${DESCRIPTIONS[id] || ""}</p>
+                <div id="modal-link-container" class="mb-6"></div>
+                <div class="flex space-x-4">
+                    <input type="text" id="flag-input" class="w-full bg-gray-900 text-white border border-gray-700 rounded-md px-4 py-2" placeholder="flag{...}">
+                    <button id="submit-flag-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-md">Submit</button>
+                </div>
+                <p id="modal-feedback" class="mt-4 text-center h-6"></p>`;
+            
+            const linkContainer = el('modal-link-container');
+            if (ch.port) {
+                linkContainer.innerHTML = `<a href="http://${window.location.hostname}:${ch.port}" target="_blank" class="inline-block bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"><i class="fas fa-external-link-alt mr-2"></i>Open Challenge</a>`;
+            } else if (ch.file) {
+                linkContainer.innerHTML = `<a href="${ch.file}" download class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"><i class="fas fa-download mr-2"></i>Download File</a>`;
+            }
+            
+            el('submit-flag-btn').addEventListener('click', handleFlagSubmit);
+            el('flag-input').addEventListener('keyup', e => e.key === 'Enter' && handleFlagSubmit());
+
+            el('challenge-modal').classList.remove('hidden');
+            el('challenge-modal').classList.add('flex');
+        }
+
+        async function handleFlagSubmit() {
+            const flag = el('flag-input').value.trim();
+            const feedbackEl = el('modal-feedback');
+            if (!flag || !activeChallengeId) return;
+            feedbackEl.textContent = 'Checking...';
+            const result = await apiCall('/submit', 'POST', { player: state.currentPlayer, challenge_id: activeChallengeId, flag });
+            if (result) {
+                feedbackEl.textContent = result.message;
+                await refreshData();
+                if (result.success) {
+                    setTimeout(() => el('challenge-modal').classList.add('hidden'), 1500);
+                }
+            }
+        }
+
+        const tabs = ['challenges', 'scoreboard', 'chart'];
+        tabs.forEach(tab => {
+            el(`tab-${tab}`).addEventListener('click', () => {
+                tabs.forEach(t => {
+                    el(`tab-${t}`).classList.remove('active');
+                    el(`panel-${t}`).classList.add('hidden');
+                });
+                el(`tab-${tab}`).classList.add('active');
+                el(`panel-${tab}`).classList.remove('hidden');
+            });
+        });
+
+        el('start-ctf-btn').addEventListener('click', async () => {
+            const name = el('player-name-input').value.trim();
+            if (!name) return;
+            const result = await apiCall('/player', 'POST', { name });
+            if (result && result.success) {
+                state.currentPlayer = result.name;
+                localStorage.setItem('ctfPlayerName', result.name);
+                el('player-name-modal').classList.add('hidden');
+                el('main-content').classList.remove('hidden');
+                await refreshData();
+                setInterval(refreshData, 15000);
+            }
+        });
+
+        el('close-modal-btn').addEventListener('click', () => el('challenge-modal').classList.add('hidden'));
+
+        const savedPlayer = localStorage.getItem('ctfPlayerName');
+        if (savedPlayer) {
+            el('player-name-input').value = savedPlayer;
+            el('start-ctf-btn').click();
+        }
+    });
+    </script>
+</body>
+</html>
